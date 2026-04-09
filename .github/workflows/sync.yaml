@@ -1,0 +1,57 @@
+name: Synchronize with upstream
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Synchronize with upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Get default branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD="$(gh repo view InSyncWithFoo/TypeScript-Website --json defaultBranchRef -q '.defaultBranchRef .name')"
+          echo "head=$HEAD" >> $GITHUB_OUTPUT
+      - name: Fetch sources
+        uses: actions/checkout@v4
+        with:
+          repository: InSyncWithFoo/TypeScript-Website
+          ref: ${{ steps.branch.outputs.head }}
+          fetch-depth: 0
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v5
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow list --json name,id -q '.[] | select(.name != "Synchronize with upstream") | .id' \
+            | xargs -I {} gh workflow disable {}
+
+          git config --global user.name "InSyncWithFoo"
+          git config --global user.email "122007197+InSyncWithFoo@users.noreply.github.com"
+
+          git remote add upstream https://github.com/microsoft/TypeScript-Website
+          git fetch --depth=10000 --all
+
+          UPSTREAM_SHA="$(git rev-parse upstream/${{ steps.branch.outputs.head }})"
+          HEAD_1_SHA="$(git rev-parse origin/${{ steps.branch.outputs.head }}~1)"
+          HEAD_SHA="$(git rev-parse origin/${{ steps.branch.outputs.head }})"
+
+          git reset --hard "$UPSTREAM_SHA"
+          git cherry-pick "$HEAD_1_SHA"
+
+          pnpm i
+          pnpm run --filter=tsconfig-reference generate:json
+          git add packages/tsconfig-reference/scripts/schema/result/schema.json
+          git commit --amend -C HEAD
+
+          git cherry-pick "$HEAD_SHA"
+          git push -f
