@@ -18,6 +18,7 @@ import { CompilerOptionName } from "../../data/_types";
 import ts from "typescript-for-docs";
 import type { JSONSchema7 } from "json-schema";
 import type { CommandLineOption } from "../tsconfigRules.js";
+import * as marked from "marked";
 
 const toJSONString = (obj: any) =>
   prettier.format(JSON.stringify(obj, null, "  "), { filepath: "thing.json" });
@@ -68,13 +69,21 @@ const okToSkip = [
 
 filteredOptions.forEach((option) => {
   const name = option.name as CompilerOptionName;
-  if (okToSkip.includes(name)) return;
+
   const sectionsPath = new URL(`../../copy/en/options/${name}.md`, import.meta.url);
 
   let section: Record<string, any> | undefined;
   if ((schemaCompilerOpts as Record<string, any>)[name]) section = schemaCompilerOpts;
   if ((schemaWatchOpts as Record<string, any>)[name]) section = schemaWatchOpts;
   if ((schemaBuildOpts as Record<string, any>)[name]) section = schemaBuildOpts;
+
+  let preserveBaseDesc: boolean = false;
+  if (!section) {
+    const topLevelSection = (schemaBase.definitions as Record<string, any>)[`${name}Definition`];
+    if (!topLevelSection) return;
+    section = topLevelSection.properties;
+    preserveBaseDesc = true;
+  }
 
   if (!section) {
     const title = `Issue creating JSON Schema for tsconfig`;
@@ -105,11 +114,18 @@ You're also probably going to need to make the new Markdown file for the compile
       );
     }
 
+    const content = (preserveBaseDesc ? `${section[name].description}\n\n---\n\n` : '') + optionFile.content.trim();
+    const contentWithLinksFixed = content.replace(/\[(?<text>.*?)\]\((?<url>.*?)\)/g, (_, text, url) => {
+      const newURL = (
+        url.startsWith('#') ?
+        `https://typescriptlang.org/tsconfig/${url}` :
+        new URL(url, 'https://typescriptlang.org').toString()
+      );
+      return `[${text}](${newURL})`;
+    });
+
     // Set the plain version, stripping internal markdown links.
-    section[name].description = optionFile.data.oneline.replace(
-      /(?:__|[*#])|\[(.*?)\]\(.*?\)/gm,
-      "$1"
-    );
+    section[name].description = contentWithLinksFixed;
 
     // Can be removed once https://github.com/ExodusMovement/schemasafe/pull/146 is merged
     const isEnumOrConst = section[name]["enum"];
@@ -123,8 +139,9 @@ You're also probably going to need to make the new Markdown file for the compile
 
     // Set a markdown version which is prioritised in vscode, giving people
     // the chance to click on the links.
-    section[name].markdownDescription =
-      section[name].description + `\n\nSee more: https://www.typescriptlang.org/tsconfig#${name}`;
+    section[name].markdownDescription = contentWithLinksFixed;
+
+    section[name]['x-intellij-html-description'] = marked.parse(contentWithLinksFixed);
   }
 });
 
